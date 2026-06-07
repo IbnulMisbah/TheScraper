@@ -36,15 +36,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       
-      - name: Install Chrome for Selenium
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y chromium-browser chromium-chromedriver
+#      - name: Install Chrome for Selenium
+#        run: |
+#          sudo apt-get update
+#          sudo apt-get install -y chromium-browser chromium-chromedriver
 
       - name: Run scraper
         env:
-          FACEBOOK_EMAIL: ${{ secrets.FACEBOOK_EMAIL || '' }}
-          FACEBOOK_PASSWORD: ${{ secrets.FACEBOOK_PASSWORD || '' }}
+#          FACEBOOK_EMAIL: ${{ secrets.FACEBOOK_EMAIL || '' }}
+#          FACEBOOK_PASSWORD: ${{ secrets.FACEBOOK_PASSWORD || '' }}
           FACEBOOK_COOKIES_JSON: ${{ secrets.FACEBOOK_COOKIES_JSON || '' }}
           TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN || '' }}
           TWITTER_API_KEY: ${{ secrets.TWITTER_API_KEY || '' }}
