@@ -22,8 +22,8 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install facebook-scraper
-          
+          pip install facebook-scraper lxml_html_clean
+
       - name: Run Scraper Agent
         run: python scraper_agent.py
 
