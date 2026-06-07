@@ -1,0 +1,36 @@
+name: Scraper Agent
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * 0'
+
+permissions:
+  contents: write
+
+jobs:
+  scrape-and-save:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install facebook-scraper
+          
+      - name: Run Scraper Agent
+        run: python scraper_agent.py
+
+      - name: Commit and Push Markdown File
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action Bot"
+          git add math_posts.md
+          git commit -m "📝 Update math posts markdown" || echo "No changes to commit"
+          git push
