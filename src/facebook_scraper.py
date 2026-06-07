@@ -66,37 +66,6 @@ class FacebookScraper(BaseScraper):
             log.error(f"Facebook authentication failed: {e}")
             return False
 
-    
-    # def authenticate(self) -> bool:
-    #     """
-    #     Authenticate with Facebook using cookies or credentials
-        
-    #     Returns:
-    #         True if authentication successful, False otherwise
-    #     """
-    #     log.info("Starting Facebook authentication...")
-        
-    #     try:
-    #         # Try loading cookies first
-    #         if self.config.FACEBOOK_COOKIES:
-    #             log.info("Attempting cookie-based authentication")
-    #             return self._authenticate_with_cookies()
-            
-    #         # Fall back to credential-based authentication
-    #         elif self.config.FACEBOOK_EMAIL and self.config.FACEBOOK_PASSWORD:
-    #             log.info("Attempting credential-based authentication")
-    #             return self._authenticate_with_credentials()
-            
-    #         else:
-    #             raise AuthenticationException(
-    #                 "No Facebook credentials or cookies provided. "
-    #                 "Set FACEBOOK_EMAIL/PASSWORD or FACEBOOK_COOKIES_JSON"
-    #             )
-        
-    #     except Exception as e:
-    #         log.error(f"Facebook authentication failed: {e}")
-    #         return False
-
     def _authenticate_with_cookies(self) -> bool:
         """
         Authenticate using saved cookies
@@ -118,8 +87,8 @@ class FacebookScraper(BaseScraper):
             headers = self.headers.copy()
             headers['Referer'] = 'https://www.facebook.com/'
             
-            # Instead of /me endpoint, try to fetch the page
-            test_url = "https://www.facebook.com/ongko.org"  # Or any page
+            # Instead of /me endpoint, try to fetch the homepage
+            test_url = "https://www.facebook.com/"
             
             response = requests.get(
                 test_url,
@@ -141,37 +110,6 @@ class FacebookScraper(BaseScraper):
         except Exception as e:
             log.error(f"Cookie authentication failed: {e}")
             return False
-
-    
-    # def _authenticate_with_cookies(self) -> bool:
-    #     """
-    #     Authenticate using saved cookies
-        
-    #     Returns:
-    #         True if successful, False otherwise
-    #     """
-    #     try:
-    #         self.cookies = self.config.FACEBOOK_COOKIES
-            
-    #         # Verify cookies by making a test request
-    #         headers = self.headers.copy()
-    #         response = requests.get(
-    #             f"{self.FACEBOOK_BASE_URL}/me",
-    #             headers=headers,
-    #             cookies=self.cookies,
-    #             timeout=self.config.TIMEOUT_SECONDS
-    #         )
-            
-    #         if response.status_code == 200:
-    #             log.success("Cookie-based authentication successful")
-    #             return True
-    #         else:
-    #             log.warning("Cookies appear to be invalid or expired")
-    #             return False
-        
-    #     except Exception as e:
-    #         log.error(f"Cookie authentication failed: {e}")
-    #         return False
     
     def _authenticate_with_credentials(self) -> bool:
         """
@@ -237,7 +175,6 @@ class FacebookScraper(BaseScraper):
             if self.driver:
                 self.driver.quit()
 
-    
     def scrape_posts(self, page_identifier: str, max_posts: int = None) -> List[Post]:
         """
         Scrape posts from a Facebook page
@@ -273,7 +210,6 @@ class FacebookScraper(BaseScraper):
         except Exception as e:
             log.error(f"Failed to scrape Facebook page: {e}")
             raise FacebookException(f"Scraping failed: {e}")
-
 
     def _scrape_posts_with_requests(self, max_posts: int) -> List[Post]:
         """
@@ -352,58 +288,6 @@ class FacebookScraper(BaseScraper):
         except Exception as e:
             log.error(f"Request failed: {e}")
             raise FacebookException(f"Failed to fetch posts: {e}")
-        
-    # def _scrape_posts_with_requests(self, max_posts: int) -> List[Post]:
-    #     """
-    #     Scrape posts using requests library (more reliable than Selenium)
-        
-    #     Args:
-    #         max_posts: Maximum posts to scrape
-            
-    #     Returns:
-    #         List of Post objects
-    #     """
-    #     posts = []
-    #     url = f"{self.FACEBOOK_BASE_URL}/{self.page_id}/posts"
-        
-    #     try:
-    #         headers = self.headers.copy()
-            
-    #         # Fetch page
-    #         log.info(f"Fetching posts from: {url}")
-    #         response = requests.get(
-    #             url,
-    #             headers=headers,
-    #             cookies=self.cookies,
-    #             timeout=self.config.TIMEOUT_SECONDS
-    #         )
-    #         response.raise_for_status()
-            
-    #         # Parse HTML
-    #         soup = BeautifulSoup(response.content, 'html.parser')
-            
-    #         # Find all post containers
-    #         post_elements = soup.find_all('div', {'data-ft': True})
-            
-    #         for post_elem in post_elements[:max_posts]:
-    #             try:
-    #                 post = self._parse_post_element(post_elem)
-    #                 if post:
-    #                     posts.append(post)
-    #                     self.posts.append(post)
-    #                     log.debug(f"Parsed post: {post.post_id}")
-    #             except Exception as e:
-    #                 log.warning(f"Failed to parse post element: {e}")
-    #                 continue
-                
-    #             # Add delay to avoid detection
-    #             self.add_delay_between_requests()
-            
-    #         return posts
-        
-    #     except requests.exceptions.RequestException as e:
-    #         log.error(f"Request failed: {e}")
-    #         raise FacebookException(f"Failed to fetch posts: {e}")
     
     def _parse_post_element(self, element) -> Optional[Post]:
         """
