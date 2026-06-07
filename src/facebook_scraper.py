@@ -1,183 +1,114 @@
 """
-Facebook page scraper implementation
-Handles authentication and post scraping from Facebook pages
+Facebook page scraper implementation using Playwright
+Handles authentication and post scraping from Facebook pages with JavaScript rendering
 """
 
-import requests
-import json
-from typing import List, Optional, Dict, Any
+import asyncio
+from typing import List, Optional
 from datetime import datetime
+import json
+import re
 from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from playwright.async_api import async_playwright, Browser, Page
 
 from .base_scraper import BaseScraper, Post
 from .logger import log
 from .exceptions import FacebookException, AuthenticationException
 from .config import Config
-from .utils import add_delay, clean_text, extract_page_id, sanitize_filename
+from .utils import clean_text, extract_page_id
 
 
 class FacebookScraper(BaseScraper):
     """
-    Facebook page scraper using Selenium and requests
-    Supports both cookie-based and credential-based authentication
+    Facebook page scraper using Playwright for JavaScript rendering
+    Supports cookie-based authentication
     """
     
     FACEBOOK_BASE_URL = "https://www.facebook.com"
-    FACEBOOK_GRAPH_URL = "https://graph.facebook.com"
     
     def __init__(self, config: Config = None):
         """Initialize Facebook scraper"""
         super().__init__(config)
-        self.driver = None
+        self.browser: Optional[Browser] = None
+        self.page: Optional[Page] = None
         self.cookies = {}
-        self.access_token = None
         self.page_id = None
-
+        
+    async def _init_browser(self):
+        """Initialize Playwright browser"""
+        try:
+            log.info("Initializing Playwright browser...")
+            playwright = await async_playwright().start()
+            self.browser = await playwright.chromium.launch(
+                headless=self.config.HEADLESS,
+                args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-dev-shm-usage',
+                    '--no-sandbox',
+                ]
+            )
+            log.success("✅ Browser initialized")
+        except Exception as e:
+            log.error(f"Failed to initialize browser: {e}")
+            raise FacebookException(f"Browser initialization failed: {e}")
+    
+    async def _create_page(self):
+        """Create a new browser page with cookies"""
+        try:
+            if not self.browser:
+                await self._init_browser()
+            
+            self.page = await self.browser.new_page()
+            
+            # Add cookies
+            if self.cookies:
+                await self.page.context.add_cookies([
+                    {
+                        'name': name,
+                        'value': value,
+                        'domain': '.facebook.com',
+                        'path': '/',
+                    }
+                    for name, value in self.cookies.items()
+                ])
+                log.info(f"Added {len(self.cookies)} cookies to page")
+            
+            # Set user agent
+            await self.page.set_extra_http_headers({
+                'User-Agent': self.headers['User-Agent'],
+            })
+            
+            log.success("✅ Page created with cookies")
+        except Exception as e:
+            log.error(f"Failed to create page: {e}")
+            raise FacebookException(f"Page creation failed: {e}")
+    
     def authenticate(self) -> bool:
-        """Authenticate with Facebook using cookies or credentials"""
+        """Authenticate with Facebook using cookies"""
         log.info("Starting Facebook authentication...")
         
         try:
             # Load cookies from env
             self.config.load_facebook_cookies()
             
-            # Try loading cookies FIRST (most reliable)
-            if self.config.FACEBOOK_COOKIES:
-                log.info("🔐 Attempting cookie-based authentication")
-                return self._authenticate_with_cookies()
-            
-            # Fall back to credential-based authentication
-            elif self.config.FACEBOOK_EMAIL and self.config.FACEBOOK_PASSWORD:
-                log.info("🔐 Attempting credential-based authentication (requires Chrome)")
-                return self._authenticate_with_credentials()
-            
-            else:
+            if not self.config.FACEBOOK_COOKIES:
                 raise AuthenticationException(
-                    "❌ No Facebook credentials or cookies provided.\n"
-                    "Please set FACEBOOK_COOKIES_JSON or FACEBOOK_EMAIL/PASSWORD in GitHub Secrets"
+                    "❌ No Facebook cookies provided.\n"
+                    "Please set FACEBOOK_COOKIES_JSON in GitHub Secrets"
                 )
+            
+            self.cookies = self.config.FACEBOOK_COOKIES
+            log.info(f"🔐 Loaded {len(self.cookies)} cookies")
+            log.success("✅ Cookie-based authentication successful!")
+            return True
         
         except Exception as e:
             log.error(f"Facebook authentication failed: {e}")
             return False
-
-    def _authenticate_with_cookies(self) -> bool:
-        """
-        Authenticate using saved cookies
-        
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            log.info("🔐 Using cookie-based authentication...")
-            self.cookies = self.config.FACEBOOK_COOKIES
-            
-            if not self.cookies:
-                log.warning("No cookies found in config")
-                return False
-            
-            log.info(f"Cookies loaded: {list(self.cookies.keys())}")
-            
-            # Verify cookies by making a test request
-            headers = self.headers.copy()
-            headers['Referer'] = 'https://www.facebook.com/'
-            
-            # Instead of /me endpoint, try to fetch the homepage
-            test_url = "https://www.facebook.com/"
-            
-            response = requests.get(
-                test_url,
-                headers=headers,
-                cookies=self.cookies,
-                timeout=self.config.TIMEOUT_SECONDS,
-                allow_redirects=True
-            )
-            
-            # If we don't get redirected to login, cookies are valid
-            if response.status_code == 200 and 'login' not in response.url.lower():
-                log.success("✅ Cookie-based authentication successful!")
-                return True
-            else:
-                log.warning(f"❌ Cookies appear to be invalid or expired (Status: {response.status_code})")
-                log.debug(f"Response URL: {response.url}")
-                return False
-        
-        except Exception as e:
-            log.error(f"Cookie authentication failed: {e}")
-            return False
     
-    def _authenticate_with_credentials(self) -> bool:
-        """
-        Authenticate using email and password with Selenium
-        
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            log.info("Launching Selenium browser for login...")
-            
-            # Setup Chrome options
-            options = webdriver.ChromeOptions()
-            if self.config.HEADLESS:
-                options.add_argument("--headless")
-            options.add_argument("--no-sandbox")
-            options.add_argument("--disable-dev-shm-usage")
-            options.add_argument(f"user-agent={self.headers['User-Agent']}")
-            
-            # Initialize driver
-            self.driver = webdriver.Chrome(options=options)
-            
-            # Navigate to Facebook
-            log.info("Navigating to Facebook login page...")
-            self.driver.get(f"{self.FACEBOOK_BASE_URL}/login")
-            
-            # Wait for and fill email field
-            email_field = WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.ID, "email"))
-            )
-            email_field.send_keys(self.config.FACEBOOK_EMAIL)
-            log.debug("Email field filled")
-            
-            # Fill password field
-            password_field = self.driver.find_element(By.ID, "pass")
-            password_field.send_keys(self.config.FACEBOOK_PASSWORD)
-            log.debug("Password field filled")
-            
-            # Click login button
-            login_button = self.driver.find_element(By.NAME, "login")
-            login_button.click()
-            log.info("Login button clicked, waiting for page load...")
-            
-            # Wait for successful login
-            WebDriverWait(self.driver, 15).until(
-                lambda driver: driver.current_url != f"{self.FACEBOOK_BASE_URL}/login"
-            )
-            
-            # Extract cookies
-            self.cookies = {cookie['name']: cookie['value'] 
-                          for cookie in self.driver.get_cookies()}
-            
-            log.success(f"Successfully logged in. Extracted {len(self.cookies)} cookies")
-            return True
-        
-        except TimeoutException as e:
-            log.error(f"Login timeout: {e}")
-            return False
-        except Exception as e:
-            log.error(f"Login failed: {e}")
-            return False
-        finally:
-            if self.driver:
-                self.driver.quit()
-
     def scrape_posts(self, page_identifier: str, max_posts: int = None) -> List[Post]:
         """
-        Scrape posts from a Facebook page
+        Scrape posts from a Facebook page (async wrapper)
         
         Args:
             page_identifier: Page URL, ID, or name
@@ -190,6 +121,18 @@ class FacebookScraper(BaseScraper):
             max_posts = self.config.MAX_POSTS
         
         try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        return loop.run_until_complete(
+            self._async_scrape_posts(page_identifier, max_posts)
+        )
+    
+    async def _async_scrape_posts(self, page_identifier: str, max_posts: int) -> List[Post]:
+        """Async method to scrape posts from a Facebook page"""
+        try:
             log.info(f"Starting to scrape Facebook page: {page_identifier}")
             
             self.page_id = extract_page_id(page_identifier)
@@ -198,8 +141,11 @@ class FacebookScraper(BaseScraper):
             
             log.info(f"Extracted page ID: {self.page_id}")
             
-            # Fetch posts using requests + BeautifulSoup
-            posts = self._scrape_posts_with_requests(max_posts)
+            # Create browser page
+            await self._create_page()
+            
+            # Scrape posts
+            posts = await self._scrape_posts_with_playwright(max_posts)
             
             # Sort chronologically (oldest first)
             self.sort_posts_chronological(reverse=False)
@@ -210,192 +156,169 @@ class FacebookScraper(BaseScraper):
         except Exception as e:
             log.error(f"Failed to scrape Facebook page: {e}")
             raise FacebookException(f"Scraping failed: {e}")
-
-    def _scrape_posts_with_requests(self, max_posts: int) -> List[Post]:
-        """
-        Scrape posts using requests library (cookies-based, no Selenium needed)
-        
-        Args:
-            max_posts: Maximum posts to scrape
-            
-        Returns:
-            List of Post objects
-        """
+        finally:
+            await self._cleanup()
+    
+    async def _scrape_posts_with_playwright(self, max_posts: int) -> List[Post]:
+        """Scrape posts using Playwright with JavaScript rendering"""
         posts = []
         
         try:
-            headers = self.headers.copy()
-            headers['Referer'] = 'https://www.facebook.com/'
-            headers['Accept-Language'] = 'en-US,en;q=0.9'
+            page_url = f"{self.FACEBOOK_BASE_URL}/{self.page_id}"
+            log.info(f"Navigating to: {page_url}")
             
-            # Extract page ID from identifier
-            page_id = self.page_id
+            # Navigate to page
+            await self.page.goto(page_url, wait_until='networkidle', timeout=60000)
+            log.success("✅ Page loaded")
             
-            # Try multiple endpoints
-            urls = [
-                f"https://www.facebook.com/{page_id}/posts",
-                f"https://www.facebook.com/{page_id}/?v=feed",
-                f"https://www.facebook.com/{page_id}/",
-            ]
+            # Wait for posts to load
+            try:
+                await self.page.wait_for_selector('[role="article"]', timeout=10000)
+                log.info("Posts container found")
+            except:
+                log.warning("Posts container not immediately found, continuing anyway")
             
-            for url in urls:
+            # Scroll to load more posts
+            log.info("Scrolling to load more posts...")
+            for scroll_count in range(min(8, max(1, max_posts // 10))):
+                await self.page.evaluate('window.scrollBy(0, window.innerHeight)')
+                await self.page.wait_for_timeout(2000)
+                log.debug(f"Scroll #{scroll_count + 1}")
+            
+            # Get page content
+            content = await self.page.content()
+            soup = BeautifulSoup(content, 'html.parser')
+            
+            # Find all post containers
+            post_elements = soup.find_all('div', {'data-ft': True})
+            log.info(f"Found {len(post_elements)} potential post elements")
+            
+            if not post_elements:
+                post_elements = soup.find_all('[role="article"]')
+                log.info(f"Trying article selector: found {len(post_elements)}")
+            
+            # Parse posts
+            for post_elem in post_elements[:max_posts]:
                 try:
-                    log.info(f"Attempting to fetch: {url}")
-                    response = requests.get(
-                        url,
-                        headers=headers,
-                        cookies=self.cookies,
-                        timeout=self.config.TIMEOUT_SECONDS,
-                        allow_redirects=True
-                    )
-                    response.raise_for_status()
-                    
-                    if response.status_code == 200:
-                        log.success(f"✅ Successfully fetched page content")
-                        soup = BeautifulSoup(response.content, 'html.parser')
-                        
-                        # Find all post containers
-                        post_elements = soup.find_all('div', {'data-ft': True})
-                        
-                        if post_elements:
-                            log.info(f"Found {len(post_elements)} potential post elements")
-                            
-                            for post_elem in post_elements[:max_posts]:
-                                try:
-                                    post = self._parse_post_element(post_elem)
-                                    if post:
-                                        posts.append(post)
-                                        self.posts.append(post)
-                                        log.debug(f"✅ Parsed post: {post.post_id}")
-                                except Exception as e:
-                                    log.debug(f"Failed to parse post element: {e}")
-                                    continue
-                                
-                                self.add_delay_between_requests()
-                        
-                        if posts:
-                            break  # Success, exit loop
-                
+                    post = self._parse_post_element(post_elem)
+                    if post and post.content.strip():
+                        posts.append(post)
+                        self.posts.append(post)
+                        log.debug(f"✅ Parsed post: {post.post_id}")
                 except Exception as e:
-                    log.warning(f"Failed with URL {url}: {e}")
+                    log.debug(f"Failed to parse post: {e}")
                     continue
             
             if not posts:
-                log.warning("⚠️ No posts found. Page might be private or cookies expired.")
+                log.warning("⚠️ No posts found. Page might be private or structure changed.")
             
             return posts
         
         except Exception as e:
-            log.error(f"Request failed: {e}")
-            raise FacebookException(f"Failed to fetch posts: {e}")
+            log.error(f"Scraping failed: {e}")
+            raise FacebookException(f"Failed to scrape posts: {e}")
     
     def _parse_post_element(self, element) -> Optional[Post]:
-        """
-        Parse a post element from Facebook
-        
-        Args:
-            element: BeautifulSoup element containing post
-            
-        Returns:
-            Post object or None
-        """
+        """Parse a post element from Facebook"""
         try:
             # Extract post ID
             post_id_str = element.get('data-ft', '{}')
-            post_data = json.loads(post_id_str)
-            post_id = post_data.get('mf_story_key', 'unknown')
+            try:
+                post_data = json.loads(post_id_str)
+                post_id = post_data.get('mf_story_key', f'post_{id(element)}')
+            except:
+                post_id = f'post_{id(element)}'
             
             # Extract content
             content_elem = element.find('p')
-            content = clean_text(content_elem.get_text()) if content_elem else "No content"
+            content = clean_text(content_elem.get_text()) if content_elem else ""
             
             # Extract timestamp
             time_elem = element.find('a', {'data-utime': True})
-            timestamp = datetime.fromtimestamp(int(time_elem['data-utime'])) if time_elem else datetime.now()
+            if time_elem and time_elem.get('data-utime'):
+                try:
+                    timestamp = datetime.fromtimestamp(int(time_elem['data-utime']))
+                except:
+                    timestamp = datetime.now()
+            else:
+                timestamp = datetime.now()
             
             # Extract images
             images = []
-            img_elements = element.find_all('img', {'style': True})
+            img_elements = element.find_all('img')
             for img in img_elements:
                 src = img.get('src')
-                if src and 'http' in src:
+                if src and ('http' in src):
                     images.append(src)
             
             # Extract engagement metrics
-            likes = self._extract_metric(element, 'Like')
-            comments = self._extract_metric(element, 'Comment')
-            shares = self._extract_metric(element, 'Share')
+            likes = self._extract_metric(element, 'like')
+            comments = self._extract_metric(element, 'comment')
+            shares = self._extract_metric(element, 'share')
             
             # Extract external links
             external_links = []
             link_elements = element.find_all('a', href=True)
             for link in link_elements:
-                href = link['href']
-                if href and href.startswith('http'):
+                href = link.get('href', '')
+                if href and href.startswith('http') and 'facebook.com' not in href:
                     external_links.append(href)
             
             # Create Post object
             post = Post(
                 platform='facebook',
-                post_id=post_id,
+                post_id=str(post_id),
                 author=self.page_id,
                 content=content,
                 timestamp=timestamp,
-                images=images,
-                external_links=external_links,
+                images=images[:3],
+                external_links=external_links[:5],
                 likes=likes,
                 comments=comments,
                 shares=shares,
-                url=f"{self.FACEBOOK_BASE_URL}/{self.page_id}/posts/{post_id}"
+                url=f"{self.FACEBOOK_BASE_URL}/{self.page_id}"
             )
             
             return post
         
         except Exception as e:
-            log.warning(f"Error parsing post element: {e}")
+            log.debug(f"Error parsing post: {e}")
             return None
     
-    def _extract_metric(self, element, metric_name: str) -> int:
-        """Extract engagement metric (likes, comments, shares)"""
+    def _extract_metric(self, element, metric_type: str) -> int:
+        """Extract engagement metric"""
         try:
-            metric_elem = element.find('span', string=lambda x: metric_name in x if x else False)
-            if metric_elem:
-                text = metric_elem.get_text()
-                # Extract number from text like "1.2K likes"
-                number_str = text.split()[0].replace('K', '000').replace('M', '000000')
-                return int(float(number_str))
+            element_text = element.get_text().lower()
+            if metric_type in element_text:
+                pattern = rf'(\d+(?:[.,]\d+)?)\s*([KMB]?)\s*{metric_type}'
+                match = re.search(pattern, element_text)
+                if match:
+                    number = float(match.group(1).replace(',', '.'))
+                    suffix = match.group(2)
+                    if suffix == 'K':
+                        return int(number * 1000)
+                    elif suffix == 'M':
+                        return int(number * 1000000)
+                    else:
+                        return int(number)
         except:
             pass
         return 0
     
     def get_post_details(self, post_id: str) -> Optional[Post]:
-        """
-        Get detailed information about a specific post
-        
-        Args:
-            post_id: Post ID
-            
-        Returns:
-            Post object or None
-        """
-        # Find post in existing posts
+        """Get detailed information about a specific post"""
         for post in self.posts:
             if post.post_id == post_id:
                 return post
-        
-        log.warning(f"Post {post_id} not found in scraped posts")
         return None
     
-    def export_cookies_to_json(self, filepath: str) -> None:
-        """
-        Export cookies to JSON file for reuse
-        
-        Args:
-            filepath: Path to save cookies JSON
-        """
+    async def _cleanup(self):
+        """Cleanup browser resources"""
         try:
-            with open(filepath, 'w') as f:
-                json.dump(self.cookies, f, indent=2)
-            log.success(f"Cookies exported to {filepath}")
+            if self.page:
+                await self.page.close()
+            if self.browser:
+                await self.browser.close()
+            log.info("Browser cleaned up")
         except Exception as e:
-            log.error(f"Failed to export cookies: {e}")
+            log.warning(f"Error during cleanup: {e}")
