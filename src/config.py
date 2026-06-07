@@ -49,17 +49,40 @@ class Config:
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
     ]
+
     
     @classmethod
     def load_facebook_cookies(cls, cookies_json_path: Optional[str] = None):
         """Load Facebook cookies from JSON file or environment variable"""
-        cookies_str = os.getenv("FACEBOOK_COOKIES_JSON")
+        try:
+            cookies_str = os.getenv("FACEBOOK_COOKIES_JSON", "").strip()
+            
+            if cookies_json_path and Path(cookies_json_path).exists():
+                with open(cookies_json_path, 'r') as f:
+                    cls.FACEBOOK_COOKIES = json.load(f)
+                    print(f"✅ Loaded cookies from file: {cookies_json_path}")
+            elif cookies_str:
+                log.info(f"Found FACEBOOK_COOKIES_JSON in environment")
+                cls.FACEBOOK_COOKIES = json.loads(cookies_str)
+                log.success(f"✅ Loaded cookies with keys: {list(cls.FACEBOOK_COOKIES.keys())}")
+            else:
+                log.warning("❌ No Facebook cookies found in environment or file")
+        except json.JSONDecodeError as e:
+            log.error(f"❌ Invalid JSON in FACEBOOK_COOKIES_JSON: {e}")
+            log.info("Make sure your JSON is valid. Example: {\"c_user\":\"123\",\"xs\":\"abc\"}")
+        except Exception as e:
+            log.error(f"❌ Error loading cookies: {e}")
+            
+    # @classmethod
+    # def load_facebook_cookies(cls, cookies_json_path: Optional[str] = None):
+    #     """Load Facebook cookies from JSON file or environment variable"""
+    #     cookies_str = os.getenv("FACEBOOK_COOKIES_JSON")
         
-        if cookies_json_path and Path(cookies_json_path).exists():
-            with open(cookies_json_path, 'r') as f:
-                cls.FACEBOOK_COOKIES = json.load(f)
-        elif cookies_str:
-            cls.FACEBOOK_COOKIES = json.loads(cookies_str)
+    #     if cookies_json_path and Path(cookies_json_path).exists():
+    #         with open(cookies_json_path, 'r') as f:
+    #             cls.FACEBOOK_COOKIES = json.load(f)
+    #     elif cookies_str:
+    #         cls.FACEBOOK_COOKIES = json.loads(cookies_str)
     
     @classmethod
     def create_output_dir(cls):
